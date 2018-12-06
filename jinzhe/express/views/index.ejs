@@ -1,0 +1,442 @@
+<html>
+  <head>
+    <link rel="shortcut icon" type="image/png" href="static/assets/logo.png"/>
+    <link type="text/css" rel="stylesheet" href="/static/css/style.css"/>
+    <script src="//unpkg.com/d3-hexgrid"></script>
+    <script src="//unpkg.com/d3"></script>
+    <title>PCN</title>
+  </head>
+    <body>
+      <div id="header">
+        <img src="/static/assets/logo.png" alt="logo" height='44'>
+      </div>
+
+      <select id="heatmapSelect">
+        <option value="greenery" selected="selected">Green Coverage</option>
+        <option value="sky">Sky Coverage</option>
+        <option value="building">Building</option>
+        <option value="water">Water</option>
+      </select>
+
+      <div id="tooltip"></div>
+      <div id="visCon"></div>
+      <div id="histogram"></div>
+      <div id="stage1Ticker">Loading pedestrain density...</div>
+      <div id="legend"></div>
+
+    </body>
+  <script>
+    const tooltip = d3.select('#tooltip')
+    const visCon = d3.select('#visCon')
+    const mapLegend = d3.select('#legend').append('svg')
+    const histCon = d3.select('#histogram').append('svg')
+    const svg = visCon.append('svg')
+      .attr('width', '100%')
+      .attr('height', '100%')
+    const plot = svg.append('g')
+    applyTransformable(svg, plot)
+
+    const DEFAULT_RADIUS = 1.2
+    const BASEMAP_COLOR = '#151515'
+
+    Promise.all([
+      d3.json('/data/sg_map.json'),
+      d3.json('/data/segmentation.json'),
+      d3.json('data/stage_1/weekday_evening.json'),
+      d3.json('data/stage_1/weekday_morning.json'),
+      d3.json('data/stage_1/weekend_evening.json'),
+      d3.json('data/stage_1/weekend_morning.json')
+    ]).then(processData)
+    
+    function processData([sg_map, segmentation, weekday_evening, weekday_morning, weekend_evening, weekend_morning]) {
+      const segmentationData = processSegmentation(segmentation)
+      const stage1Data = [
+        processStage1Data(weekday_morning),
+        processStage1Data(weekday_evening),
+        processStage1Data(weekend_morning),
+        processStage1Data(weekend_evening)
+      ]
+      visualize(sg_map, segmentationData, stage1Data)
+    }
+
+    function visualize(mapGeoJSON, segmentationData, stage1Data) {
+      const projection = d3.geoMercator().fitSize(getDimensions(visCon), mapGeoJSON)
+      const	path = d3.geoPath(projection);
+
+      const attrColorMap = {greenery: '#00FF00', sky:'#48dbfb', building: '#fff200', water: '#0000FF'}
+      // drawMap(plot, path, mapGeoJSON)
+      const display = drawHexGridMap(plot, 'hexGridMap', getDimensions(visCon), mapGeoJSON, segmentationData, attrColorMap, path, projection)
+      display('greenery')
+      d3.select('#heatmapSelect').on('change', function() {
+        const attribute = d3.select(this).property('value')
+        display(attribute)
+      })
+      
+      const stage1DataNames = ['Weekday morning', 'Weekday evening', 'Weekend morning', 'Weekend evening']
+      let i = 0
+      setInterval(function() {
+        i = i < stage1Data.length ? i : 0
+        d3.select('#stage1Data').remove()
+        d3.select('#stage1Ticker').text(stage1DataNames[i])
+        drawMarkers(plot, 'stage1Data', stage1Data[i], projection, DEFAULT_RADIUS, 'people', 'red')
+        i = i + 1
+      }, 6000);
+    }
+  
+    /* Helper functions */
+    function processSegmentation(segmentation) {
+      return segmentation.map(function(x) {
+        return {
+          coordinates: [x.Longitude, x.Latitude],
+          greenery: parseFloat(x['plant/flower']) + parseFloat(x['tree/palm']) + parseFloat(x['grass/field']),
+          sky: parseFloat(x['sky']),
+          building: parseFloat(x['building/skyscraper/house/hovel']),
+          water: parseFloat(x['water/sea/river/lake'])
+        }
+      })
+    }
+
+    function processStage1Data(data) {
+      return data.map(function(x) {
+        return {
+          coordinates: [x.Longitude, x.Latitude],
+          people: parseFloat(x['People']),
+          bicycles: parseFloat(x['Bicycles']),
+          vehicles: parseFloat(x['Vehicles'])
+        }
+      })
+    }
+    function getDimensions(selection) {
+      const rect = selection.node().getBoundingClientRect()
+      const width = rect.width
+      const height = rect.height
+      return [width, height]
+    }
+
+    function drawMap(plot, path, mapGeoJSON) {
+      plot.append('g')
+        .attr('id', 'map')
+        .selectAll("path")
+        .data(mapGeoJSON.features)
+        .enter()
+        .append('path')
+          .attr('d', path)
+          .attr('class', 'basemap')
+    }
+
+    function drawHexGridMap(plot, id, dimensions, mapGeoJSON, data, attrColorMap, path, projection, hexRadius=10) {
+      const attributes = Object.keys(attrColorMap)
+
+      // Helper functions
+      const getAttrMeanKey = attribute => attribute + 'Mean'
+      // Pre-processing function
+      function processMeanAttributes(hexGridLayout) {
+        function calcAttributeMean(binItems, attribute) {
+          return !binItems.length ? 0 : d3.mean(binItems, x => x[attribute])
+        }
+        // initialize minMax object
+        const minMax = {}
+        for (let attribute in attrColorMap)
+          minMax[attribute] = {min: 1, max: 0}
+        
+        // process each hexgrid bin
+        hexGridLayout.forEach(function (binItems) {
+          for (let attribute in attrColorMap) {
+            const attrMeanKey = getAttrMeanKey(attribute)
+            binItems[attrMeanKey] = calcAttributeMean(binItems, attribute)
+
+            // comupte minMax
+            minMax[attribute].min = Math.min(minMax[attribute].min, binItems[attrMeanKey]);
+            minMax[attribute].max = Math.max(minMax[attribute].max, binItems[attrMeanKey]);
+          }
+        })
+        return minMax
+      }
+
+      // Prep data.
+      const dataPoints = Array.from(data, function (site){
+        const coords = projection(site.coordinates)
+        return {
+          x: coords[0],
+          y: coords[1],
+          lat: site.coordinates[1],
+          lng:site.coordinates[0],
+          greenery: site.greenery,
+          sky: site.sky,
+          building: site.building,
+          water: site.water
+        }
+      });
+
+      // Create a hexgrid generator
+      const hexgrid = d3.hexgrid()
+        .extent(dimensions)
+        .geography(mapGeoJSON)
+        .pathGenerator(path)
+        .projection(projection)
+        .hexRadius(hexRadius)
+
+      // Instantiate the generator
+      const hex = hexgrid(dataPoints, attributes)
+
+      // Preprocess data in each hexgrid bin
+      const minMax = processMeanAttributes(hex.grid.layout)
+
+      // Draw the hexes
+      const hexGridMap = plot.append('g')
+        .attr('id', id)
+        .selectAll('path')
+        .data(hex.grid.layout)
+        .enter()
+        .append('path')
+        .attr('d', hex.hexagon())
+        .attr('transform', d => `translate(${d.x} ${d.y})`)
+        .attr('class', d => !d.length ? 'hexCell' : 'hexCell nonEmpty')
+        .on('mouseover', function(d) {
+          if (d.length) {
+            // Show tooltip
+            tooltip
+              .style('opacity', 1)
+              .style('top', `${d3.event.pageY - 20}px`)
+              .style('left', `${d3.event.pageX + 10}px`);
+            tooltip.html(
+              `Green coverage: ${formatNum(d[getAttrMeanKey('greenery')]*100)}%<br>
+              Sky coverage: ${formatNum(d[getAttrMeanKey('sky')]*100)}%<br>
+              Buildings: ${formatNum(d[getAttrMeanKey('building')]*100)}%<br>
+              Water: ${formatNum(d[getAttrMeanKey('water')]*100)}%<br>`)
+            
+            // highlight hex
+            saveColor(d3.select(this))
+            d3.select(this).style('fill', '#FFFFFF')
+
+            // Highlight bar
+            const attribute = d3.select('#heatmapSelect').property('value')
+            const value = d[getAttrMeanKey(attribute)]
+            d3.selectAll('rect').each(function (r) {
+              if ('x0' in r && withinBinRange(r, value)) {
+                saveColor(d3.select(this))
+                d3.select(this).style('fill', '#FFFFFF')
+                return
+              }
+            })
+          }
+        })
+        .on('mouseout', function(d) {
+          tooltip.style('opacity', 0)
+          restoreColor(d3.select(this))
+          d3.selectAll('rect').each(function (r) {
+            restoreColor(d3.select(this))
+          })
+        })
+      
+      const displayLegend = createLegend()
+      const displayHistogram = createHistogram()
+
+      function displayAttributeHeatmap(attribute) {
+        const getColor = d3.scalePow()
+          .exponent(Math.E)
+          .domain([minMax[attribute].min, minMax[attribute].max])
+          .range([BASEMAP_COLOR, attrColorMap[attribute]])
+          .interpolate(d3.interpolateHcl)
+        hexGridMap
+          .transition()
+          .style('fill', d => getColor(d[getAttrMeanKey(attribute)]))
+          .attr('value', d => d[getAttrMeanKey(attribute)])
+
+        displayLegend(attribute, getColor)
+        displayHistogram(attribute)
+      }
+
+      function createLegend(intervals=11, hexScale=0.8) {
+        const fracRange = getFractionalRange(intervals)
+        const legendData = fracRange.map(function(frac) {
+          const datum = {}
+          for (let attribute in minMax) {
+            datum[attribute] = frac * minMax[attribute].max
+          }
+          return datum
+        })
+        const gLegend = mapLegend
+          .append('g')
+          .attr('class', 'legend')
+          .attr('transform', `translate(${hexRadius}, 20)`)
+
+        gLegend
+          .append('text')
+          .text(`Point density (scale exponent: ${d3.format('.4')(Math.E)})`)
+          .attr('fill', '#555555')
+          .attr('font-family', 'sans-serif')
+          .attr('font-size', '0.7rem')
+          .attr('font-weight', 'bold')
+          .attr('dy', 19)
+          .attr('dx', -4);
+
+        const legendHexCon = gLegend
+          .selectAll('.legend__key')
+          .data(legendData)
+          .enter()
+          .append('g')
+          .attr('class', 'legend__key')
+          .attr('transform', (d, i) => `translate(${i * Math.sqrt(3) * hexRadius * hexScale}, 0)`);
+
+        const legendHex = legendHexCon
+          .append('g')
+          .attr('transform', `scale(${hexScale})`)
+          .append('path')
+          .attr('d', hex.hexagon())
+          .style('stroke-width', 0.5)
+          .style('stroke', '#ffffff');
+
+        const legendScale = legendHexCon
+          .append('text')
+
+        function displayLegend(attribute, getColor) {
+          legendHex
+            .style('fill', d => getColor(d[attribute]))
+          legendScale
+            .text((d, i, n) =>
+              (i === 0 || i === parseInt(n.length/2) || i === n.length - 1)
+                ? formatNum(d[attribute] * 100) + '%'
+                : ''
+            )
+            .attr('fill', '#555555')
+            .attr('font-family', 'sans-serif')
+            .attr('font-size', '0.7rem')
+            .attr('font-weight', 'bold')
+            .attr('text-anchor', 'middle')
+            .attr('dy', -10)
+        }
+        return displayLegend;
+      }
+
+      function createHistogram(width=244, height=300, numBins=32) {
+        // create hexBinValues list
+        const hexBinValues = {}
+        for (let attribute in attrColorMap) {
+          hexBinValues[attribute] = hex.grid.layout.filter(d => d.datapoints).map(d => d[getAttrMeanKey(attribute)])
+        }
+
+        const histPlot = histCon
+          .attr("width", width)
+          .attr("height", height)
+          .append("g")
+
+        function displayAttributeHistogram(attribute) {
+          histPlot.selectAll("rect").exit().remove()
+
+          const x = d3.scaleLinear()
+            .domain([minMax[attribute].min, minMax[attribute].max]).nice()
+            .range([0, width])
+          
+          const bins = d3.histogram()
+            .domain(x.domain())
+            .thresholds(x.ticks(numBins))
+            (hexBinValues[attribute])
+          
+          const yMax = d3.max(bins, bin => bin.length);
+          const yMin = d3.min(bins, bin => bin.length);
+
+          const y = d3.scaleLinear()
+            .domain([0, yMax])
+            .range([0, height])
+
+          const xAxis = d3.axisBottom(x).tickSizeOuter(0)
+
+          histPlot.selectAll("rect").data([]).exit().remove()
+          
+          histPlot.selectAll("rect")
+            .data(bins)
+            .enter()
+            .append("rect")
+            .on('mouseover', function(d) {
+              // Highlight bar
+              saveColor(d3.select(this))
+              d3.select(this).style('fill', '#FFFFFF')
+              
+              // Show tooltip
+              tooltip
+                .style('opacity', 1)
+                .style('top', `${d3.event.pageY - 20}px`)
+                .style('left', `${d3.event.pageX + 10}px`);
+              tooltip.html(
+                `Coverage range: ${formatNum(d.x0*100)}% — ${formatNum(d.x1*100)}%<br>
+                hexbins: ${d.length}<br>`
+              );
+              
+              // Highlight hexes
+              d3.selectAll('.hexCell.nonEmpty').each(function(data) {
+                const hexCell = d3.select(this)
+                const value = hexCell.attr('value')
+                if (withinBinRange(d, value)) {
+                  saveColor(hexCell)
+                  hexCell.style('fill', '#FFFFFF')
+                }
+              })
+            })
+            .on('mouseout', function(d) {
+              restoreColor(d3.select(this))
+              tooltip.style('opacity', 0);
+              d3.selectAll('.hexCell.nonEmpty').each(function(data) {
+                restoreColor(d3.select(this))
+              })
+
+            })
+            .style("fill", attrColorMap[attribute])
+            .attr("x", d => x(d.x0))
+            .attr("y", height)
+            .attr("width", d => Math.max(0, x(d.x1) - x(d.x0) - 0.5))
+            .transition()
+			      .duration(1000)
+            .attr("y", d => height - y(d.length))
+            .attr("height", d => y(d.length))
+            .attr('x0', d => d.x0)
+            .attr('x1', d => d.x1)
+            .call(xAxis)
+        }
+        return displayAttributeHistogram
+      }
+      return displayAttributeHeatmap
+    }
+
+    function drawMarkers(plot, id, data, projection, radius, attribute, color, opacity=1) {
+      const maxVal = Math.max(...data.map(x => x[attribute]))
+      plot.append('g')
+        .attr('id', id)
+        .selectAll("circle")
+        .data(data)
+        .enter()
+        .append('circle')
+        .attr("cx", d => projection(d.coordinates)[0])
+        .attr("cy", d => projection(d.coordinates)[1])
+        .transition()
+        .duration(1000)
+        .attr("r", radius)
+        .style("fill", color)
+        .attr("fill-opacity", d => opacity * d[attribute]/maxVal)
+    }
+
+    function applyTransformable(parentSelection, transformSelection, minLevel=1, maxLevel=32) {
+      const zoom = d3.zoom()
+        .scaleExtent([minLevel, maxLevel])
+        .on("zoom", function() {
+          transformSelection.selectAll('circle').attr('r', DEFAULT_RADIUS)
+          transformSelection.attr("transform", d3.event.transform)
+        })
+      parentSelection.call(zoom)
+    }
+    
+    function saveColor(g) {
+      g.attr('origColor', g.style('fill'))
+    }
+    function restoreColor(g) {
+      if (g.attr('origColor')) {
+        g.style('fill', g.attr('origColor'))
+        g.attr('origColor', null)
+      }
+    }
+    const getFractionalRange = n => d3.range(n).map(d => d / (n - 1));
+    const withinBinRange = (bin, value) => parseFloat(value) >= parseFloat(bin['x0']) && parseFloat(value) <= parseFloat(bin['x1'])
+    const formatNum = d3.format('.2');
+ 
+  </script>
+</html>

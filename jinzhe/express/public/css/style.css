@@ -1,0 +1,93 @@
+body {
+  background: #1e1e1e;
+  margin: 0;
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+#heatmapSelect {
+  position: absolute;
+  left: 16px;
+  top: 80px;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  border-radius: 0;
+  font-size: 16px;
+  padding: 6px 42px 6px 6px;
+  width: 256px;
+  border: none;
+  color: #FFFFFF;
+  background: url(http://www.foxrep.com/wp-content/uploads/2017/11/Down-Arrow-PNG-white.png) 96% / 8% no-repeat rgba(0,0,0,0.5);
+}
+
+#stage1Ticker {
+  position: absolute;
+  display: inline-block;
+  top: 80px;
+  right: 16px;
+  color: #FFFFFF;
+  font-size: 16px;
+}
+
+#histogram {
+  position: absolute;
+  left: 16px;
+  top: 126px;
+  display: inline-block;
+  padding: 6px;
+  background: rgba(0,0,0, 0.5);
+  height: 300px;
+  width: 244px;
+}
+
+#legend {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  display: inline-block;
+  height: 41px;
+  width: 202px;
+  overflow: hidden;
+}
+
+#header {
+  height: 44px;
+  background: #111111;
+  text-align: center;
+  padding: 10px;
+}
+
+#visCon {
+  width: 100%;
+  height: calc(100% - 64px);
+}
+
+#tooltip {
+  position: absolute;
+  z-index: 1;
+  opacity: 0;
+  font-size: 12px;
+  pointer-events: none;
+  background-color: #eee;
+  padding: 0.5em;
+}
+
+#tooltip.hidden {
+  display: none;
+}
+
+path.basemap{
+  stroke-width: 1.5;
+  fill: #151515;
+  stroke: #1a1a1a;
+}
+path.basemap.highlight{
+  fill: #333;
+}
+path.hexCell{
+  stroke-width: 1.5;
+  stroke: #1a1a1a;
+}
+path.hexCell.nonEmpty, rect{
+  cursor: pointer;
+}
